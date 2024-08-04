@@ -37,6 +37,7 @@ from ..core.utils import is_real_iterable
 from ..core.validation import require_integer_in_range, comma_sep
 from ..random import random_state
 from abc import ABC, abstractmethod
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def _default_if_none(value, default, name, ensure_not_none=True):
@@ -514,6 +515,56 @@ class BiasedRandomWalk(RandomWalk):
 
         return walks
 
+        def run_parallel(
+            self, nodes, *, n=None, length=None, p=None, q=None, seed=None, weighted=None):
+            n = _default_if_none(n, self.n, "n")
+            length = _default_if_none(length, self.length, "length")
+            p = _default_if_none(p, self.p, "p")
+            q = _default_if_none(q, self.q, "q")
+            weighted = _default_if_none(weighted, self.weighted, "weighted")
+            self._validate_walk_params(nodes, n, length)
+            self._check_weights(p, q, weighted)
+            rs, _ = self._get_random_state(seed)
+
+            nodes = self.graph.node_ids_to_ilocs(nodes)
+
+            if weighted:
+                self._check_weights_valid()
+
+            weight_dtype = self.graph._edges.weights.dtype
+            cast_func = np.cast[weight_dtype]
+            ip = cast_func(1.0 / p)
+            iq = cast_func(1.0 / q)
+
+            if np.isinf(ip):
+                raise ValueError(
+                    f"p: value ({p}) is too small. It must be possible to represent 1/p in {weight_dtype}, but this value overflows to infinity."
+                )
+            if np.isinf(iq):
+                raise ValueError(
+                    f"q: value ({q}) is too small. It must be possible to represent 1/q in {weight_dtype}, but this value overflows to infinity."
+                )
+
+            walks = []
+            with ProcessPoolExecutor() as executor:
+                futures = {
+                    executor.submit(
+                        generate_walks,
+                        self.graph,
+                        node,
+                        n,
+                        length,
+                        ip,
+                        iq,
+                        weighted,
+                        rs,
+                        weight_dtype
+                    ): node for node in nodes
+                }
+                for future in as_completed(futures):
+                    walks.extend(future.result())
+            return walks
+    
     def _check_weights(self, p, q, weighted):
         """
         Checks that the parameter values are valid or raises ValueError exceptions with a message indicating the
@@ -532,6 +583,48 @@ class BiasedRandomWalk(RandomWalk):
 
         if type(weighted) != bool:
             raise ValueError(f"weighted: expected boolean value, found {weighted}")
+
+
+def generate_walks(graph, node, n, length, ip, iq, weighted, rs, weight_dtype):
+    walks = []
+    for walk_number in range(n):  # generate n walks per root node
+        walk = [node]
+
+        previous_node = None
+        previous_node_neighbours = []
+
+        current_node = node
+
+        for _ in range(length - 1):
+            if weighted:
+                neighbours, weights = graph.neighbor_arrays(
+                    current_node, include_edge_weight=True, use_ilocs=True
+                )
+            else:
+                neighbours = graph.neighbor_arrays(
+                    current_node, use_ilocs=True
+                )
+                weights = np.ones(neighbours.shape, dtype=weight_dtype)
+            if len(neighbours) == 0:
+                break
+
+            mask = neighbours == previous_node
+            weights[mask] *= ip
+            mask |= np.isin(neighbours, previous_node_neighbours)
+            weights[~mask] *= iq
+
+            choice = naive_weighted_choices(rs, weights)
+            if choice is None:
+                break
+
+            previous_node = current_node
+            previous_node_neighbours = neighbours
+            current_node = neighbours[choice]
+
+            walk.append(current_node)
+
+        walks.append(list(graph.node_ilocs_to_ids(walk)))
+    return walks
 
 
 class UniformRandomMetaPathWalk(RandomWalk):
