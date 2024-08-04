@@ -515,55 +515,55 @@ class BiasedRandomWalk(RandomWalk):
 
         return walks
 
-        def run_parallel(
-            self, nodes, *, n=None, length=None, p=None, q=None, seed=None, weighted=None):
-            n = _default_if_none(n, self.n, "n")
-            length = _default_if_none(length, self.length, "length")
-            p = _default_if_none(p, self.p, "p")
-            q = _default_if_none(q, self.q, "q")
-            weighted = _default_if_none(weighted, self.weighted, "weighted")
-            self._validate_walk_params(nodes, n, length)
-            self._check_weights(p, q, weighted)
-            rs, _ = self._get_random_state(seed)
+    def run_parallel(
+        self, nodes, *, n=None, length=None, p=None, q=None, seed=None, weighted=None):
+        n = _default_if_none(n, self.n, "n")
+        length = _default_if_none(length, self.length, "length")
+        p = _default_if_none(p, self.p, "p")
+        q = _default_if_none(q, self.q, "q")
+        weighted = _default_if_none(weighted, self.weighted, "weighted")
+        self._validate_walk_params(nodes, n, length)
+        self._check_weights(p, q, weighted)
+        rs, _ = self._get_random_state(seed)
 
-            nodes = self.graph.node_ids_to_ilocs(nodes)
+        nodes = self.graph.node_ids_to_ilocs(nodes)
 
-            if weighted:
-                self._check_weights_valid()
+        if weighted:
+            self._check_weights_valid()
 
-            weight_dtype = self.graph._edges.weights.dtype
-            cast_func = np.cast[weight_dtype]
-            ip = cast_func(1.0 / p)
-            iq = cast_func(1.0 / q)
+        weight_dtype = self.graph._edges.weights.dtype
+        cast_func = np.cast[weight_dtype]
+        ip = cast_func(1.0 / p)
+        iq = cast_func(1.0 / q)
 
-            if np.isinf(ip):
-                raise ValueError(
-                    f"p: value ({p}) is too small. It must be possible to represent 1/p in {weight_dtype}, but this value overflows to infinity."
-                )
-            if np.isinf(iq):
-                raise ValueError(
-                    f"q: value ({q}) is too small. It must be possible to represent 1/q in {weight_dtype}, but this value overflows to infinity."
-                )
+        if np.isinf(ip):
+            raise ValueError(
+                f"p: value ({p}) is too small. It must be possible to represent 1/p in {weight_dtype}, but this value overflows to infinity."
+            )
+        if np.isinf(iq):
+            raise ValueError(
+                f"q: value ({q}) is too small. It must be possible to represent 1/q in {weight_dtype}, but this value overflows to infinity."
+            )
 
-            walks = []
-            with ProcessPoolExecutor() as executor:
-                futures = {
-                    executor.submit(
-                        generate_walks,
-                        self.graph,
-                        node,
-                        n,
-                        length,
-                        ip,
-                        iq,
-                        weighted,
-                        rs,
-                        weight_dtype
-                    ): node for node in nodes
-                }
-                for future in as_completed(futures):
-                    walks.extend(future.result())
-            return walks
+        walks = []
+        with ProcessPoolExecutor() as executor:
+            futures = {
+                executor.submit(
+                    generate_walks,
+                    self.graph,
+                    node,
+                    n,
+                    length,
+                    ip,
+                    iq,
+                    weighted,
+                    rs,
+                    weight_dtype
+                ): node for node in nodes
+            }
+            for future in as_completed(futures):
+                walks.extend(future.result())
+        return walks
     
     def _check_weights(self, p, q, weighted):
         """
